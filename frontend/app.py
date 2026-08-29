@@ -35,20 +35,13 @@ st.markdown("""
     }
 
     /* ===== 侧边栏 ===== */
-    [data-testid="stSidebar"],
-    [data-testid="stSidebar"] ~ div {
-        visibility: visible !important;
-        opacity: 1 !important;
-        transform: none !important;
-        display: block !important;
-    }
     [data-testid="stSidebar"] {
         background: #161616;
         border-right: 1px solid #2a2a2a;
+        transition: transform 0.3s ease, opacity 0.3s ease;
         min-width: 340px !important;
         width: 340px !important;
         max-width: 340px !important;
-        transform: translateX(0) !important;
     }
     [data-testid="stSidebar"] > div {
         padding: 20px 16px;
@@ -296,6 +289,29 @@ st.markdown("""
     .stSpinner > div {
         border-top-color: #555 !important;
     }
+
+    /* ===== iOS 风格全局圆角 ===== */
+    [data-testid="stMetric"],
+    [data-testid="stExpander"],
+    [data-testid="stFileUploader"],
+    .stAlert,
+    .stButton > button,
+    [data-baseweb="select"] > div,
+    .chunk-card,
+    .msg-user,
+    .msg-ai,
+    .source-tag {
+        border-radius: 14px !important;
+    }
+    .stButton > button {
+        border-radius: 12px !important;
+    }
+    .stChatInput textarea {
+        border-radius: 16px !important;
+    }
+    .stChatInput {
+        border-radius: 16px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -525,73 +541,79 @@ if question:
         except Exception as e:
             st.error(f"错误：{str(e)}")
 
-# ==================== 绿色悬浮按钮 + 自动展开侧边栏（JS 注入） ====================
+# ==================== 悬浮按钮 + 自动展开侧边栏（JS 注入） ====================
 components.html("""
 <script>
 (function() {
     var doc = window.parent.document;
+    var isOpen = false;
 
-    // 页面加载后自动尝试展开侧边栏
+    // 页面加载后自动展开侧边栏
     setTimeout(function() {
-        var allBtns = doc.querySelectorAll('button');
-        for (var i = 0; i < allBtns.length; i++) {
-            var label = (allBtns[i].getAttribute('aria-label') || '').toLowerCase();
-            if (label.indexOf('sidebar') !== -1) {
-                var sidebar = doc.querySelector('[data-testid="stSidebar"]');
-                if (sidebar && sidebar.offsetWidth === 0) {
-                    allBtns[i].click();
-                }
-                return;
-            }
+        var sidebar = doc.querySelector('[data-testid="stSidebar"]');
+        if (sidebar) {
+            sidebar.style.transform = 'translateX(0)';
+            sidebar.style.opacity = '1';
+            sidebar.style.pointerEvents = 'auto';
+            sidebar.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
+            isOpen = true;
+            var b = doc.getElementById('sidebar-toggle-fab');
+            if (b) b.classList.add('active');
         }
-    }, 1000);
+    }, 500);
 
-    // 避免重复注入悬浮按钮
+    // 避免重复注入
     if (doc.getElementById('sidebar-toggle-fab')) return;
 
-    var btn = doc.createElement('button');
+    var btn = doc.createElement('div');
     btn.id = 'sidebar-toggle-fab';
-    btn.textContent = '☰';
+    btn.innerHTML = '<span>+</span>';
     Object.assign(btn.style, {
         position: 'fixed',
-        top: '12px',
-        left: '12px',
+        top: '14px',
+        left: '14px',
         zIndex: '999999',
-        width: '40px',
-        height: '40px',
-        borderRadius: '10px',
+        width: '38px',
+        height: '38px',
+        borderRadius: '12px',
         background: '#22c55e',
-        border: 'none',
-        color: '#fff',
-        fontSize: '20px',
         cursor: 'pointer',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        boxShadow: '0 2px 12px rgba(34,197,94,0.4)',
-        transition: 'all 0.2s ease',
-        fontFamily: 'system-ui'
+        boxShadow: '0 2px 12px rgba(34,197,94,0.5)',
+        transition: 'background 0.2s ease, box-shadow 0.2s ease',
+        userSelect: 'none'
     });
-    btn.onmouseenter = function() { btn.style.background = '#16a34a'; btn.style.transform = 'scale(1.08)'; };
-    btn.onmouseleave = function() { btn.style.background = '#22c55e'; btn.style.transform = 'scale(1)'; };
+    // 内部 + 符号，旋转动画
+    var span = btn.querySelector('span');
+    Object.assign(span.style, {
+        color: '#fff',
+        fontSize: '24px',
+        fontWeight: '300',
+        lineHeight: '1',
+        transition: 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+        display: 'block',
+        transform: 'rotate(0deg)'
+    });
+    btn.onmouseenter = function() { btn.style.background = '#16a34a'; btn.style.boxShadow = '0 4px 16px rgba(34,197,94,0.6)'; };
+    btn.onmouseleave = function() { btn.style.background = '#22c55e'; btn.style.boxShadow = '0 2px 12px rgba(34,197,94,0.5)'; };
     btn.onclick = function() {
-        var allBtns = doc.querySelectorAll('button');
-        for (var i = 0; i < allBtns.length; i++) {
-            var label = (allBtns[i].getAttribute('aria-label') || '').toLowerCase();
-            if (label.indexOf('sidebar') !== -1) {
-                allBtns[i].click();
-                return;
-            }
-        }
-        // 兜底：找 collapsedControl 容器
-        var cc = doc.querySelector('[data-testid="collapsedControl"]');
-        if (cc) { cc.click(); return; }
-        // 再兜底：点击侧边栏本身让它出现
         var sidebar = doc.querySelector('[data-testid="stSidebar"]');
-        if (sidebar) {
-            sidebar.style.display = 'block';
-            sidebar.style.width = '380px';
+        if (!sidebar) return;
+        isOpen = !isOpen;
+        if (isOpen) {
+            sidebar.style.transform = 'translateX(0)';
+            sidebar.style.opacity = '1';
+            sidebar.style.pointerEvents = 'auto';
+            span.style.transform = 'rotate(45deg)';
+        } else {
+            sidebar.style.transform = 'translateX(-100%)';
+            sidebar.style.opacity = '0';
+            sidebar.style.pointerEvents = 'none';
+            span.style.transform = 'rotate(0deg)';
         }
+        sidebar.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
     };
     doc.body.appendChild(btn);
 })();
