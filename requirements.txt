@@ -1,0 +1,37 @@
+# RAG 项目依赖 - 生产级配置
+
+# LangChain 核心
+langchain>=1.0.0
+langchain-core>=1.0.0
+langchain-community>=0.4.0
+langchain-openai>=0.3.0
+langchain-huggingface>=0.1.0
+
+# FastAPI 异步框架
+fastapi>=0.115.0
+uvicorn>=0.34.0
+python-multipart>=0.0.20
+
+# 向量数据库
+chromadb>=0.5.0
+
+# 文档处理
+pypdf>=5.0.0
+python-docx>=1.1.0
+unstructured>=0.16.0
+
+# 模型相关
+transformers>=4.47.0
+torch>=2.5.0
+onnxruntime>=1.20.0
+
+# 工具库
+pyyaml>=6.0
+pydantic>=2.10.0
+httpx>=0.28.0
+aiofiles>=24.0.0
+
+# 可选依赖（根据需要安装）
+# milvus-lite>=2.4.0  # Milvus 向量库
+# dashscope>=1.20.0   # 阿里云 DashScope
+# cohere>=5.13.0      # Cohere API

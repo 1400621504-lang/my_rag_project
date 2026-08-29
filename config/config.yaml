@@ -1,0 +1,100 @@
+# RAG 项目配置文件 - Ollama 本地全栈方案
+
+# Embedding 模型配置
+embedding:
+  type: "ollama"  # ollama | local_hf | api
+  ollama:
+    model_name: "bge-m3"  # 多语言，中文效果优秀
+    base_url: "http://localhost:11434"
+  local_hf:
+    model_name: "BAAI/bge-base-zh-v1.5"
+    max_length: 512
+    batch_size: 32
+  api:
+    provider: "openai"
+    model_name: "text-embedding-3-small"
+    api_key: "${EMBEDDING_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    batch_size: 16
+
+# Rerank 模型配置
+rerank:
+  enabled: false  # 暂时没有本地 Rerank 模型，后续可加
+  type: "local"  # local | api
+  local:
+    model_name: "bge-reranker-v2-m3"
+    model_path: "./models/rerank/bge-reranker-v2-m3"
+    max_length: 512
+    top_k: 5
+  api:
+    provider: "cohere"
+    model_name: "rerank-v3.5"
+    api_key: "${RERANK_API_KEY}"
+
+# LLM 配置
+llm:
+  type: "local"  # local（Ollama） | api
+  local:
+    model_name: "qwen2.5:7b"
+    base_url: "http://localhost:11434"
+    max_tokens: 2048
+    temperature: 0.7
+  api:
+    provider: "deepseek"
+    model_name: "deepseek-chat"
+    api_key: "${DEEPSEEK_API_KEY}"
+    base_url: "https://api.deepseek.com/v1"
+    max_tokens: 2048
+    temperature: 0.7
+    stream: true
+
+# 向量数据库配置
+vectorstore:
+  type: "chromadb"  # chromadb | milvus
+  chromadb:
+    path: "./data/chroma_db"
+    collection_name: "rag_collection"
+  milvus:
+    host: "localhost"
+    port: 19530
+    collection_name: "rag_collection"
+
+# 文档切分配置
+chunking:
+  strategy: "recursive"  # recursive | parent_child
+  parent:
+    chunk_size: 800
+    chunk_overlap: 200
+  child:
+    chunk_size: 200
+    chunk_overlap: 50
+
+# 检索配置
+retrieval:
+  search_type: "mmr"  # similarity | mmr
+  search_kwargs:
+    k: 5  # 最终返回数量
+    fetch_k: 20  # MMR 候选数量
+    lambda_mult: 0.7  # MMR 多样性权重（0=多样性，1=相关性）
+  multi_query:
+    enabled: false  # 暂不启用，后续实现
+    num_queries: 3
+
+# 对话配置
+conversation:
+  memory_type: "buffer"  # buffer | summary | entity
+  max_history: 10  # 最大对话轮数
+  condense_question: false  # 问题改写（后续实现）
+
+# 高并发配置
+async:
+  enabled: true
+  max_connections: 100
+  timeout: 30
+
+# 缓存配置
+cache:
+  enabled: true
+  type: "memory"
+  ttl: 3600
+  max_size: 1000
