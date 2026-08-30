@@ -85,6 +85,15 @@ class RerankService:
         """rerank 前建议的召回数量"""
         return self._candidate_k
 
+    @candidate_k.setter
+    def candidate_k(self, value: int):
+        """允许前端实时改召回候选数
+
+        原来只有 getter，侧边栏那个滑块一赋值就抛
+        AttributeError: property 'candidate_k' has no setter。
+        """
+        self._candidate_k = max(1, int(value))
+
     def rerank(self, query: str, docs: List, top_n: int = 5) -> List:
         """对候选文档做精排，返回相关性最高的 top_n 个
 

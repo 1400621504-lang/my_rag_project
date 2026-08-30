@@ -177,12 +177,24 @@ class AgentRAGChain:
 
     # ==================== 调用入口 ====================
 
+    def _history_for(self, question: str) -> List:
+        """本轮带进提示词的历史，末尾与当前问题重复的旧问答先剥掉
+
+        连着问同一个问题时，上一轮答案留在历史里会让模型直接照抄，
+        改了检索参数也看不出区别（与 RAGChain._history_for 同一处理）。
+        """
+        history = self.chat_messages[-self.rag.max_history * 2 :]
+        target = (question or "").strip()
+        while len(history) >= 2 and str(history[-2].content).strip() == target:
+            history = history[:-2]
+        return history
+
     def ask(self, question: str) -> Dict[str, Any]:
         """跑一轮 Agent，返回答案 + 检索轨迹"""
         started = time.perf_counter()
         self.evidence.clear()
 
-        messages = self.chat_messages[-self.rag.max_history * 2 :] + [HumanMessage(question)]
+        messages = self._history_for(question) + [HumanMessage(question)]
         steps: List[Dict[str, Any]] = []
         answer_source = "agent"
 
@@ -238,7 +250,7 @@ class AgentRAGChain:
         """
         started = time.perf_counter()
         self.evidence.clear()
-        messages = self.chat_messages[-self.rag.max_history * 2 :] + [HumanMessage(question)]
+        messages = self._history_for(question) + [HumanMessage(question)]
 
         answer_parts: List[str] = []
         steps: List[Dict[str, Any]] = []
@@ -307,6 +319,14 @@ class AgentRAGChain:
         }
         yield {"type": "done", **{k: v for k, v in self.last_result.items() if k != "answer"}}
 
+    def _seed_evidence(self, question: str):
+        """把固定管线真正喂给模型的资料登记进证据表
+
+        回退路径没走工具，证据表本来是空的 → 前端一个来源都显示不出来，
+        用户看不出检索发生过什么。补登记后两条路径的来源都可见。
+        """
+        self.evidence.add_many(self.rag._context_docs(question))
+
     def _fallback(self, question: str) -> str:
         """回退到固定管线：一次完整检索 + 一次生成
 
@@ -316,10 +336,12 @@ class AgentRAGChain:
         注意 chain 的入参是问题字符串本身：RunnablePassthrough 会把整个
         输入原样透传给 question，传 dict 会让 embedding 收到字典而报错。
         """
+        self._seed_evidence(question)
         return self.rag.chain.invoke(question)
 
     def _fallback_stream(self, question: str) -> Iterator[str]:
         """固定管线的流式版本，供 stream_ask 兜底时用"""
+        self._seed_evidence(question)
         for chunk in self.rag.chain.stream(question):
             yield chunk.content if hasattr(chunk, "content") else str(chunk)
 

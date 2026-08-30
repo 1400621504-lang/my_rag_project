@@ -56,6 +56,7 @@ Agent 全对率当场掉到 0.167（同期固定管线 0.667），83% 的题一�
 | 评测 | 检索层 Hit@K / MRR / nDCG 消融（28 题）+ 端到端问答对比（12 题） | v1.2+ |
 | Agent | LangGraph 工具循环：`search_knowledge_base` / `list_knowledge_base`，多次查询改写，未查库自动回退固定管线 | v1.3 |
 | MCP | 7 个工具 + 1 个 resource，把知识库接到 Claude Desktop / Codex 等 MCP 客户端 | v1.3 |
+| 状态回显 | 侧边栏参数全部实时生效；回答下方显示本轮真实的 Top K、检索与上下文块数、召回链路和耗时 | v1.3.3 |
 
 ## 项目结构
 
@@ -104,6 +105,9 @@ pip install -r requirements.txt
 streamlit run frontend/app.py                        # 界面，http://localhost:8501
 uvicorn backend.api.rag_api:app --reload --port 8000 # 或走 API
 ```
+
+改过 `backend/` 下的代码要重启 Streamlit：它只重跑 `frontend/app.py`，已经 import 的后端
+模块不会热重载。不重启的话前端拖滑块看着"完全没反应"，很容易误判成参数失效。
 
 接入 MCP 客户端（Claude Desktop / Codex 等的配置片段）：
 
@@ -182,8 +186,9 @@ uvicorn backend.api.rag_api:app --reload --port 8000 # 或走 API
 - 父子文档（v1.2）仍需在评测里补一组对照：当前库是 recursive 策略入库，不含 `parent_content`，展开逻辑实际是 no-op
 - `multi_query` 与 `condense_question`（多轮问题改写）只有配置项，没有实现
 - MMR 在当前规模下无效果，需要更大语料重新评估
-- 检索缓存是进程内的，多副本之间不共享；TTL 60 秒，只写了"文档增删时主动清"，
-  别的进程直接改库（比如另一个终端跑评测）不会被感知
+- 检索缓存是进程内的，多副本之间不共享；TTL 60 秒，缓存键含问题文本与全部检索参数，
+  清空对话会一并清缓存；但别的进程直接改库（比如另一个终端跑评测）不会被感知，
+  需要手动点"清空对话"或重启服务
 - 无并发压测、无鉴权、无检索日志与可观测性，不具备多用户生产能力
 - 向量库为单机 ChromaDB，规模上限在十万分块量级
 

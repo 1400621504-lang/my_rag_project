@@ -16,6 +16,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.documents import Document
 from typing import List, Dict, Any, Optional, Tuple
 from collections import OrderedDict
+import hashlib
 import time
 import yaml
 from pathlib import Path
@@ -101,6 +102,9 @@ class RAGChain:
             self.config.get('retrieval', {}).get('max_context_chars', 6000)
         )
         self._retrieval_cache: "OrderedDict[str, Tuple[float, List]]" = OrderedDict()
+        # 本轮检索/上下文块数，仅供前端状态行展示
+        self.last_retrieved_count = 0
+        self.last_context_count = 0
 
         # 对话历史（自己管理，不依赖 langchain.memory）
         self.chat_messages: List = []  # 存储 HumanMessage 和 AIMessage
@@ -186,7 +190,7 @@ class RAGChain:
         """
         final_k = self.retrieval_config.get('search_kwargs', {}).get('k', 5)
 
-        cache_key = self._cache_key(final_k)
+        cache_key = self._cache_key(question, final_k)
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
@@ -218,18 +222,26 @@ class RAGChain:
         self._cache_put(cache_key, docs)
         return docs
 
-    def _cache_key(self, final_k: int) -> str:
-        """缓存键必须带上检索配置
+    def _cache_key(self, question: str, final_k: int) -> str:
+        """缓存键 = 问题 + 全部影响检索结果的参数
 
-        前端能实时改 k / 双路 / 精排 / 检索策略，只按问题缓存会让调完参数
-        还拿到旧结果，看起来就像参数没生效。
+        两个坑都踩过：
+        - 不带问题（旧实现）→ TTL 内所有问题共用同一份资料，换个问题
+          拿到的是上一个问题的上下文，答非所问（实测见 RESULTS.md 的 F14）。
+        - 不带参数 → 前端调完 k / 双路 / 精排还拿旧结果，看起来像参数没生效。
         """
+        sk = self.retrieval_config.get('search_kwargs', {}) or {}
         return "|".join([
+            f"q={hashlib.sha1(question.strip().encode('utf-8')).hexdigest()[:16]}",
             f"k={final_k}",
             f"type={self.retrieval_config.get('search_type', 'mmr')}",
+            f"fetch={sk.get('fetch_k', 20)}",
+            f"lambda={sk.get('lambda_mult', 0.7)}",
             f"hybrid={int(bool(self.hybrid_enabled))}",
+            f"bm25={self.hybrid_config.get('bm25_top_k', 20)}",
             f"rerank={int(bool(self.rerank_enabled))}",
-        ]) + "||"
+            f"recall={self.reranker.candidate_k}",
+        ])
 
     def _cache_get(self, key: str) -> Optional[List]:
         """命中就顺带做 LRU 提权，过期就删掉"""
@@ -263,8 +275,15 @@ class RAGChain:
         链路的 {context} 和前端的来源列表都走这里，
         保证"列给用户看的"和"模型实际看到的"是同一批。
         公开的 retrieve() 不裁剪，评测要量的是检索本身。
+
+        顺带把裁剪前后的块数记在实例上，前端状态行要用它区分
+        "Top K 没生效"和"检索到了但超上下文预算被裁掉"这两种完全不同的情况。
         """
-        return fit_context_budget(self._retrieve_rerank(question), self.max_context_chars)
+        docs = self._retrieve_rerank(question)
+        final = fit_context_budget(docs, self.max_context_chars)
+        self.last_retrieved_count = len(docs)
+        self.last_context_count = len(final)
+        return final
 
     def retrieve(self, question: str) -> List:
         """对外公开的检索入口（Agentic RAG 的工具、MCP server 都复用它）
@@ -329,7 +348,7 @@ class RAGChain:
             {
                 "context": RunnableLambda(self._context_docs) | format_docs,
                 "question": RunnablePassthrough(),
-                "chat_history": lambda x: self.chat_messages[-self.max_history * 2:]
+                "chat_history": lambda x: self._history_for(x)
             }
             | prompt
             | self.llm
@@ -337,6 +356,19 @@ class RAGChain:
         )
 
         return chain
+
+    def _history_for(self, question: str) -> List:
+        """本轮真正带进提示词的历史
+
+        同一个问题连着问时，上一轮那条"同题问答"若还留在历史里，
+        模型会直接照抄自己上次的答案，检索参数改了也看不出来变化。
+        所以把末尾与当前问题相同的问答对先剥掉。
+        """
+        history = self.chat_messages[-self.max_history * 2:]
+        target = (question or "").strip()
+        while len(history) >= 2 and str(history[-2].content).strip() == target:
+            history = history[:-2]
+        return history
 
     def _save_to_memory(self, question: str, answer: str):
         """保存对话到历史"""
@@ -380,9 +412,25 @@ class RAGChain:
             sources.append(src)
         return sources
 
+    def apply_llm_params(self, temperature=None, max_tokens=None):
+        """把前端调的 Temperature / Max Tokens 真正写进模型对象
+
+        滑块只读不写的话就是个摆设。ChatOllama 的采样上限字段叫
+        num_predict，ChatOpenAI 叫 max_tokens，这里统一屏蔽掉差异。
+        """
+        is_api = self.config['llm']['type'] == 'api'
+        if temperature is not None:
+            self.llm.temperature = float(temperature)
+        if max_tokens is not None:
+            if is_api:
+                self.llm.max_tokens = int(max_tokens)
+            else:
+                self.llm.num_predict = int(max_tokens)
+
     def clear_memory(self):
-        """清空对话历史"""
+        """清空对话历史（同时清检索缓存，避免清完还拿到旧资料）"""
         self.chat_messages.clear()
+        self.clear_retrieval_cache()
 
     def get_memory_stats(self) -> dict:
         """获取对话历史统计"""

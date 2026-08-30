@@ -5,6 +5,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import sys
+import time
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent
@@ -448,8 +449,9 @@ with st.sidebar:
     # ===== 检索参数 =====
     st.markdown("### 检索参数")
 
-    top_k = st.slider("Top K", 1, 20, 5,
-                       help="最终交给大模型的文档数量")
+    _cfg_k = int(rag_chain.retrieval_config.get("search_kwargs", {}).get("k", 5)) if rag_chain else 5
+    top_k = st.slider("Top K", 1, 20, _cfg_k,
+                       help="最终交给大模型的文档数量。改这里会立刻重建检索器，回答下方的状态行会显示实际拿了几块")
     search_type = st.selectbox("检索策略", ["mmr", "similarity"])
     if search_type == "mmr":
         lambda_mult = st.slider("多样性 λ", 0.0, 1.0, 0.7, 0.05)
@@ -491,8 +493,14 @@ with st.sidebar:
 
     # ===== LLM 参数 =====
     st.markdown("### 模型参数")
-    temperature = st.slider("Temperature", 0.0, 1.0, 0.7, 0.1)
-    max_tokens = st.slider("Max Tokens", 256, 4096, 2048, 256)
+    # 滑块默认值直接读模型实例，避免"界面显示 0.7、实际跑的是配置里的值"
+    _def_temp = float(getattr(rag_chain.llm, "temperature", 0.7) or 0.7) if rag_chain else 0.7
+    temperature = st.slider("Temperature", 0.0, 1.0, _def_temp, 0.1,
+                            help="只作用于 RAG 固定管线。Agent 模式沿用配置里的低温度，温度偏高会让 tool_call 结构畸形")
+    _def_max = int(getattr(rag_chain.llm, "num_predict", None)
+                   or getattr(rag_chain.llm, "max_tokens", None) or 2048) if rag_chain else 2048
+    max_tokens = st.slider("Max Tokens", 256, 8192, _def_max // 256 * 256, 256,
+                           help="单次回答的采样上限")
 
     st.markdown("---")
 
@@ -550,6 +558,42 @@ def _ask_agent(question: str):
     slot.empty()
     return answer, meta.get("sources", []), meta
 
+def _render_trace(sources, meta):
+    """渲染一轮回答下方的来源标签与检索状态行
+
+    历史渲染和实时渲染共用一份逻辑。之前只有重跑页面才看得到来源，
+    刚问完那一轮什么都看不到，用户没法当场判断参数有没有生效。
+    """
+    if sources:
+        def _tag(s):
+            label = s.get("source", "未知")
+            if "rerank_score" in s:
+                label += f' · {s["rerank_score"]}'
+            return f'<span class="source-tag">{label}</span>'
+        source_html = " ".join([_tag(s) for s in sources])
+        st.markdown(
+            f'<div style="margin-bottom:8px;">{source_html}</div>',
+            unsafe_allow_html=True
+        )
+
+    if meta:
+        route = "双路+RRF" if meta.get("hybrid") else "单路向量"
+        route += "+精排" if meta.get("rerank") else ""
+        if meta.get("engine") == "fixed":
+            raw = meta.get('retrieved_raw') or meta.get('retrieved', 0)
+            cut = " · 超上下文预算已裁剪" if raw > meta.get('retrieved', 0) else ""
+            st.caption(
+                f"上下文 {meta.get('retrieved', 0)}/{raw} 块（Top K={meta.get('top_k', '-')}） · "
+                f"{route} · {meta.get('latency_ms', 0) / 1000:.1f}s{cut}"
+            )
+        else:
+            grounded = not str(meta.get("answer_source", "")).startswith("fallback")
+            st.caption(
+                f"查库 {meta.get('search_calls', 0)} 次 · 证据 {meta.get('retrieved', 0)} 块"
+                f"（Top K={meta.get('top_k', '-')}） · {meta.get('latency_ms', 0) / 1000:.1f}s · "
+                + ("Agent 依据检索作答" if grounded else "模型未检索，已回退固定管线")
+            )
+
 
 # 初始化
 if "messages" not in st.session_state:
@@ -583,27 +627,8 @@ with chat_container:
                 unsafe_allow_html=True
             )
 
-            # 来源标签
-            if sources:
-                def _tag(s):
-                    label = s.get("source", "未知")
-                    if "rerank_score" in s:
-                        label += f' · {s["rerank_score"]}'
-                    return f'<span class="source-tag">{label}</span>'
-                source_html = " ".join([_tag(s) for s in sources])
-                st.markdown(
-                    f'<div style="margin-bottom:16px;">{source_html}</div>',
-                    unsafe_allow_html=True
-                )
-
-            meta = msg.get("meta") or {}
-            if meta:
-                grounded = not str(meta.get("answer_source", "")).startswith("fallback")
-                st.caption(
-                    f"检索 {meta.get('search_calls', 0)} 次 · "
-                    f"{meta.get('latency_ms', 0) / 1000:.1f}s · "
-                    + ("Agent 依据检索作答" if grounded else "模型未检索，已回退固定管线")
-                )
+            # 来源标签与检索状态行
+            _render_trace(sources, msg.get("meta") or {})
 
 # ==================== 输入区域 ====================
 
@@ -624,6 +649,9 @@ if question:
         rag_chain.rerank_enabled = rerank_enabled
         rag_chain.hybrid_enabled = hybrid_enabled
         rag_chain.hybrid_config['bm25_top_k'] = bm25_top_k
+        # 召回候选数要写回精排器，否则重建检索器时用的还是旧值，滑块等于白拖
+        rag_chain.reranker.candidate_k = candidate_k
+        rag_chain.apply_llm_params(temperature=temperature, max_tokens=max_tokens)
         rag_chain.retrieval_config = {
             'search_type': search_type,
             'search_kwargs': {
@@ -641,17 +669,20 @@ if question:
             if engine_mode == "Agent 多跳":
                 with st.chat_message("assistant"):
                     answer, sources, meta = _ask_agent(question)
+                    meta = dict(meta or {})
+                    meta.update({
+                        "engine": "agent",
+                        "retrieved": len(sources or []),
+                        "top_k": top_k,
+                        "hybrid": bool(hybrid_enabled),
+                        "rerank": bool(rerank_enabled),
+                    })
                     st.markdown(
                         f'<div class="msg-ai">{answer}</div>', unsafe_allow_html=True
                     )
-                    if meta:
-                        grounded = not str(meta.get("answer_source", "")).startswith("fallback")
-                        st.caption(
-                            f"检索 {meta.get('search_calls', 0)} 次 · "
-                            f"{meta.get('latency_ms', 0) / 1000:.1f}s · "
-                            + ("Agent 依据检索作答" if grounded else "模型未检索，已回退固定管线")
-                        )
+                    _render_trace(sources, meta)
             else:
+                _started = time.perf_counter()
                 sources = rag_chain.get_sources(question)
 
                 with st.chat_message("assistant"):
@@ -665,6 +696,19 @@ if question:
 
                         response_placeholder.markdown(full_answer)
                     answer = full_answer
+
+                # 状态行：把本轮真正生效的检索参数摊开显示，
+                # 免得调了参数却看不出差别，分不清是没生效还是被历史复读
+                meta = {
+                    "engine": "fixed",
+                    "retrieved": len(sources),
+                    "top_k": top_k,
+                    "hybrid": bool(hybrid_enabled),
+                    "rerank": bool(rerank_enabled),
+                    "latency_ms": int((time.perf_counter() - _started) * 1000),
+                    "retrieved_raw": getattr(rag_chain, "last_retrieved_count", len(sources)),
+                }
+                _render_trace(sources, meta)
 
             st.session_state.messages.append({
                 "role": "assistant",
