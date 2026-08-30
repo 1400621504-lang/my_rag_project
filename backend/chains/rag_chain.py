@@ -14,15 +14,33 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.documents import Document
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
+from collections import OrderedDict
+import time
 import yaml
 from pathlib import Path
 
 
-class RAGChain:
-    """RAG 主链
+def format_docs(docs: List) -> str:
+    """把检索到的文档拼成给 LLM 看的上下文文本
 
-    包含所有高级功能的生产级 RAG 系统
+    带 [序号] 和来源，方便模型在回答里用 [1] [2] 标注引用。
+    固定管线和 Agentic RAG 共用这一份，保证两条路径下模型看到的格式一致。
+    """
+    if not docs:
+        return "（未检索到相关资料）"
+    formatted = []
+    for i, doc in enumerate(docs, 1):
+        source = doc.metadata.get('source', '未知')
+        formatted.append(f"[{i}] 来源：{source}\n{doc.page_content}")
+    return "\n\n---\n\n".join(formatted)
+
+
+class RAGChain:
+    """RAG 主链：召回 → RRF 融合 → 精排 → 父块展开 → 生成
+
+    固定管线（single-shot）：一次检索、一次生成，延迟可控，
+    适合单跳事实问答。多跳/信息不足的问题交给 agent_chain.AgentRAGChain。
     """
 
     def __init__(self, config_path: str = None):
@@ -49,6 +67,13 @@ class RAGChain:
         self.hybrid_enabled = self.hybrid_config.get('enabled', False)
         from backend.services.bm25_service import BM25Service
         self.bm25 = BM25Service()
+
+        # 检索结果缓存（同一次问答会被检索两遍时用得上）
+        cache_config = self.config.get('cache', {})
+        self.cache_enabled = cache_config.get('enabled', True)
+        self.cache_ttl = float(cache_config.get('ttl', 60))
+        self.cache_max_size = int(cache_config.get('max_size', 200))
+        self._retrieval_cache: "OrderedDict[str, Tuple[float, List]]" = OrderedDict()
 
         # 对话历史（自己管理，不依赖 langchain.memory）
         self.chat_messages: List = []  # 存储 HumanMessage 和 AIMessage
@@ -131,6 +156,11 @@ class RAGChain:
         """
         final_k = self.retrieval_config.get('search_kwargs', {}).get('k', 5)
 
+        cache_key = self._cache_key(final_k)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         # 第一阶段：召回
         if self.hybrid_enabled:
             from backend.retriever.fusion import reciprocal_rank_fusion
@@ -155,7 +185,55 @@ class RAGChain:
         # 第三阶段：子块 → 父块展开（small-to-big）
         docs = self._expand_to_parents(docs)
 
+        self._cache_put(cache_key, docs)
         return docs
+
+    def _cache_key(self, final_k: int) -> str:
+        """缓存键必须带上检索配置
+
+        前端能实时改 k / 双路 / 精排 / 检索策略，只按问题缓存会让调完参数
+        还拿到旧结果，看起来就像参数没生效。
+        """
+        return "|".join([
+            f"k={final_k}",
+            f"type={self.retrieval_config.get('search_type', 'mmr')}",
+            f"hybrid={int(bool(self.hybrid_enabled))}",
+            f"rerank={int(bool(self.rerank_enabled))}",
+        ]) + "||"
+
+    def _cache_get(self, key: str) -> Optional[List]:
+        """命中就顺带做 LRU 提权，过期就删掉"""
+        if not self.cache_enabled:
+            return None
+        entry = self._retrieval_cache.get(key)
+        if entry is None:
+            return None
+        created_at, docs = entry
+        if time.perf_counter() - created_at > self.cache_ttl:
+            del self._retrieval_cache[key]
+            return None
+        self._retrieval_cache.move_to_end(key)
+        return docs
+
+    def _cache_put(self, key: str, docs: List):
+        if not self.cache_enabled:
+            return
+        self._retrieval_cache[key] = (time.perf_counter(), docs)
+        self._retrieval_cache.move_to_end(key)
+        while len(self._retrieval_cache) > self.cache_max_size:
+            self._retrieval_cache.popitem(last=False)
+
+    def clear_retrieval_cache(self):
+        """文档增删后手动清一下，避免 TTL 窗口内拿到旧结果"""
+        self._retrieval_cache.clear()
+
+    def retrieve(self, question: str) -> List:
+        """对外公开的检索入口（Agentic RAG 的工具、MCP server 都复用它）
+
+        与内部 _retrieve_rerank 等价，只是给外部调用一个稳定契约，
+        避免 Agent 侧依赖下划线开头的私有方法。
+        """
+        return self._retrieve_rerank(question)
 
     def _expand_to_parents(self, docs: List) -> List:
         """把命中的子块替换为其父块（父子检索的最后一步）
@@ -207,16 +285,6 @@ class RAGChain:
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{question}"),
         ])
-
-        def format_docs(docs):
-            """将检索到的文档格式化为文本"""
-            if not docs:
-                return "（未检索到相关资料）"
-            formatted = []
-            for i, doc in enumerate(docs, 1):
-                source = doc.metadata.get('source', '未知')
-                formatted.append(f"[{i}] 来源：{source}\n{doc.page_content}")
-            return "\n\n---\n\n".join(formatted)
 
         chain = (
             {

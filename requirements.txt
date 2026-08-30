@@ -16,6 +16,10 @@ langchain-ollama>=1.0.0
 langchain-chroma>=1.1.0
 langchain-text-splitters>=1.0.0
 
+# Agent 编排与 MCP
+langgraph>=1.0.0              # Agentic RAG 的工具调用循环（backend/chains/agent_chain.py）
+mcp>=2.0.0                    # 把知识库暴露成 MCP server（backend/api/mcp_server.py）
+
 # 向量数据库
 chromadb>=0.5.0
 

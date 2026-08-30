@@ -78,12 +78,19 @@ retrieval:
     lambda_mult: 0.7  # MMR 多样性权重（0=多样性，1=相关性）
   # 双路检索：向量召回 + BM25 关键词召回，RRF 融合后再精排
   hybrid:
-    enabled: false  # 默认关，可在前端开关打开
+    enabled: true   # 评测依据：双路+RRF 的 MRR@5 0.890 最高，且比纯精排快 5.5 倍（见 backend/eval/RESULTS.md）
     bm25_top_k: 20  # BM25 单路召回数量
     rrf_k: 60  # RRF 平滑常数（经验值 60）
   multi_query:
     enabled: false  # 暂不启用，后续实现
     num_queries: 3
+
+# Agent 配置（Agentic RAG：由 LLM 自主决定检索策略）
+agent:
+  enabled: true
+  max_iterations: 8    # LangGraph 递归上限，一次工具调用约占 2 步
+  max_search_calls: 4  # 提示词中约束的检索次数上限，防止无限改写查询
+  temperature: 0.1     # 工具调用要稳定，比生成回答（0.7）低
 
 # 对话配置
 conversation:
@@ -97,9 +104,11 @@ async:
   max_connections: 100
   timeout: 30
 
-# 缓存配置
+# 检索结果缓存
+# 存在的理由：/chat 这类接口会"先取来源再走生成"，同一个问题实际检索两遍，
+# 精排在 CPU 上很贵，这层缓存就是吃掉这份重复。
 cache:
   enabled: true
-  type: "memory"
-  ttl: 3600
-  max_size: 1000
+  type: "memory"   # 目前只实现进程内内存缓存，多进程/多副本之间不共享
+  ttl: 60          # 秒。文档上传/删除会立刻清空缓存，所以这里只需挡住同一问题的重复检索
+  max_size: 200    # 最多缓存多少个问题（超出按最近未使用淘汰）

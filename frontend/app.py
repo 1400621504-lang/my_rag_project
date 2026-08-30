@@ -375,7 +375,7 @@ with st.sidebar:
 
         uploaded_files = st.file_uploader(
             "选择文件",
-            type=["pdf", "txt", "md", "docx"],
+            type=["pdf", "txt", "md", "docx", "png", "jpg", "jpeg", "bmp", "tiff", "webp"],
             accept_multiple_files=True,
             label_visibility="collapsed"
         )
@@ -430,6 +430,17 @@ with st.sidebar:
     else:
         lambda_mult = 0.7
 
+    # 引擎选择：固定管线（一次检索一次生成）vs Agent（模型自己决定查几次）
+    engine_mode = st.segmented_control(
+        "问答引擎",
+        ["RAG 固定管线", "Agent 多跳"],
+        default="RAG 固定管线",
+        help="Agent 由模型自主决定是否检索、检索几次、怎么改写检索词，"
+             "适合跨多条资料的问题；代价是延迟高一个量级",
+    )
+    if engine_mode == "Agent 多跳":
+        st.caption("Agent 模式下 Top K / 双路 / 精排仍是底层检索配置，每次工具调用都会用到")
+
     # 双路检索（向量 + BM25 关键词）
     hybrid_enabled = st.toggle("双路检索 (BM25)", value=rag_chain.hybrid_enabled,
                                help="叠加关键词召回，擅长精确词/错误码，与向量结果 RRF 融合")
@@ -464,6 +475,8 @@ with st.sidebar:
     with col3:
         if st.button("清空对话", width="stretch"):
             rag_chain.clear_memory()
+            if "agent_chain" in st.session_state:
+                st.session_state.agent_chain.clear_memory()
             st.session_state.messages = []
             st.rerun()
     with col4:
@@ -473,6 +486,44 @@ with st.sidebar:
 
 
 # ==================== 主区域：对话 ====================
+
+
+def _get_agent():
+    """Agent 复用同一个 rag_chain 实例，避免重复加载 embedding 和精排模型"""
+    from backend.chains.agent_chain import AgentRAGChain
+
+    if "agent_chain" not in st.session_state:
+        st.session_state.agent_chain = AgentRAGChain(rag=rag_chain)
+    return st.session_state.agent_chain
+
+
+def _ask_agent(question: str):
+    """跑一轮 Agent，实时把检索轨迹显示出来，返回 (答案, 来源, 元信息)"""
+    agent = _get_agent()
+    slot = st.empty()
+    answer = ""
+    steps = []
+    meta = {}
+
+    for event in agent.stream_ask(question):
+        etype = event.get("type")
+        if etype == "step":
+            steps.append(event["step"])
+            args = event["step"].get("args") or {}
+            query = args.get("query") or args.get("query") or ""
+            slot.markdown(f"🔎 正在检索：**{query}**")
+        elif etype == "token":
+            answer += event["text"]
+            slot.markdown(f"🔎 已检索 {len(steps)} 次\n\n{answer}▌")
+        elif etype == "reset":
+            answer = ""
+            slot.markdown(f"🔎 已检索 {len(steps)} 次")
+        elif etype == "done":
+            meta = event
+
+    slot.empty()
+    return answer, meta.get("sources", []), meta
+
 
 # 初始化
 if "messages" not in st.session_state:
@@ -551,24 +602,34 @@ if question:
 
         # 生成回答
         try:
-            sources = rag_chain.get_sources(question)
+            if engine_mode == "Agent 多跳":
+                with st.chat_message("assistant"):
+                    answer, sources, meta = _ask_agent(question)
+                    st.markdown(
+                        f'<div class="msg-ai">{answer}</div>', unsafe_allow_html=True
+                    )
+                    if meta:
+                        grounded = not str(meta.get("answer_source", "")).startswith("fallback")
+                        st.caption(
+                            f"检索 {meta.get('search_calls', 0)} 次 · "
+                            f"{meta.get('latency_ms', 0) / 1000:.1f}s · "
+                            + ("Agent 依据检索作答" if grounded else "模型未检索，已回退固定管线")
+                        )
+            else:
+                sources = rag_chain.get_sources(question)
 
-            with st.chat_message("assistant"):
-                with st.spinner("思考中..."):
-                    response_placeholder = st.empty()
-                    full_answer = ""
+                with st.chat_message("assistant"):
+                    with st.spinner("思考中..."):
+                        response_placeholder = st.empty()
+                        full_answer = ""
 
-                    for chunk in rag_chain.stream(question):
-                        full_answer += chunk
-                        response_placeholder.markdown(full_answer + "▌")
+                        for chunk in rag_chain.stream(question):
+                            full_answer += chunk
+                            response_placeholder.markdown(full_answer + "▌")
 
-                    response_placeholder.markdown(full_answer)
+                        response_placeholder.markdown(full_answer)
+                    answer = full_answer
 
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": full_answer,
-                "sources": sources
-            })
         except Exception as e:
             st.error(f"错误：{str(e)}")
 

@@ -1,0 +1,74 @@
+# Agent 问答评测集（端到端，考的是"能不能答对"，不只是"能不能召回"）
+#
+# 评分方式：不用 LLM 当裁判（7B 模型判卷本身不可靠，还会引入随机性），
+# 改用 must_contain 关键词全覆盖判定 —— 每条答案必须出现的字符串由人工给定，
+# 结果可复现，也方便直接指出漏了哪个事实。
+#
+# hop 字段：
+#   single   —— 单个分块内就能答完，作对照组
+#   multi    —— 事实散落在 2 个以上分块，考多次检索
+#   rewrite  —— 提问措辞和原文差距大（含中英混问），考查询改写
+#
+# 注意语料目前只有 14 个分块，固定管线 k=5 一次就覆盖了三成库，
+# multi 类题目的对照差距会被压低，这点在 RESULTS 里已注明。
+
+questions:
+  - id: a01
+    type: single
+    question: "我的学号是多少"
+    must_contain: ["2350390033"]
+
+  - id: a02
+    type: single
+    question: "实验室在哪个房间"
+    must_contain: ["S4108"]
+
+  - id: a03
+    type: single
+    question: "Boss 战 BGM 的音量常量是多少"
+    must_contain: ["0.32"]
+
+  - id: a04
+    type: single
+    question: "KnowFlow 那个基础版 RAG 项目在哪个目录"
+    must_contain: ["rag_project"]
+
+  - id: a05
+    type: multi
+    question: "我拿校级一等奖的那个项目，和它的基础版本，两个项目路径分别是什么"
+    must_contain: ["my_rag_project", "rag_project"]
+
+  - id: a06
+    type: multi
+    question: "我导师所在的学校，和我那个游戏的线上域名，分别是什么"
+    must_contain: ["湖北第二师范学院", "huaduo.store"]
+
+  - id: a07
+    type: multi
+    question: "我什么时候毕业，待办里 RAG 项目打算部署到哪，刷题目标是多少题"
+    must_contain: ["2027", "Streamlit Cloud", "50"]
+
+  - id: a08
+    type: multi
+    question: "笔记里列的本地 embedding 模型有哪些，我简历上那个开源项目大概多少 star"
+    must_contain: ["BGE-M3", "12k"]
+
+  - id: a09
+    type: multi
+    question: "常规 BGM 和 Boss BGM 音量各是多少，直接改这些参数的开发版文件在哪"
+    must_contain: ["0.38", "0.32", "game-dev.html"]
+
+  - id: a10
+    type: rewrite
+    question: "which university am I studying at and what is my major"
+    must_contain: ["湖北第二师范学院", "人工智能"]
+
+  - id: a11
+    type: rewrite
+    question: "手机浏览器边缘滑动被系统手势吃掉那个坑，最后打算用什么 CSS 属性兜底"
+    must_contain: ["overscroll-behavior"]
+
+  - id: a12
+    type: rewrite
+    question: "为什么不走纯算法岗而选大模型应用方向，这个判断的依据是什么"
+    must_contain: ["学历"]
