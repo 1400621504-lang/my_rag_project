@@ -358,6 +358,21 @@ with st.sidebar:
 
     # 上传
     with st.expander("上传文档", expanded=False):
+        # 切分参数（放在上传按钮之前，点击"处理入库"时才读取，保证顺序正确）
+        chunk_strategy = st.selectbox(
+            "切分策略",
+            ["recursive", "parent_child"],
+            help="recursive=递归字符切分；parent_child=小子块检索、命中返回大父块"
+        )
+        if chunk_strategy == "parent_child":
+            chunk_size = st.slider("父块大小", 200, 3000, 800, 100,
+                                   help="命中后返回给大模型的父块大小（子块大小在配置 child 中设）")
+        else:
+            chunk_size = st.slider("Chunk Size", 100, 2000, 800, 50,
+                                   help="每个文档块的最大字符数")
+        chunk_overlap = st.slider("Overlap", 0, 500, 200, 25,
+                                  help="相邻文档块的重叠字符数")
+
         uploaded_files = st.file_uploader(
             "选择文件",
             type=["pdf", "txt", "md", "docx"],
@@ -369,12 +384,17 @@ with st.sidebar:
             progress = st.progress(0)
             for i, file in enumerate(uploaded_files):
                 content = file.read()
-                docs = processor.process_bytes(content, file.name)
+                docs = processor.process_bytes(
+                    content, file.name,
+                    strategy=chunk_strategy,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                )
                 if docs:
                     vs_service.add_documents(docs)
                     total += len(docs)
                 progress.progress((i + 1) / len(uploaded_files))
-            st.success(f"入库 {total} 个文档块")
+            st.success(f"入库 {total} 个文档块（{chunk_strategy}）")
             st.rerun()
 
     # 文档列表 + 查看 chunks
@@ -396,21 +416,6 @@ with st.sidebar:
                     st.rerun()
     else:
         st.markdown('<div style="color:#555; font-size:13px; padding:8px;">知识库为空</div>', unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # ===== 文档切分参数 =====
-    st.markdown("### 切分参数")
-
-    chunk_strategy = st.selectbox(
-        "切分策略",
-        ["recursive", "parent_child"],
-        help="recursive=递归字符切分，parent_child=父子文档切分"
-    )
-    chunk_size = st.slider("Chunk Size", 100, 2000, 800, 50,
-                           help="每个文档块的最大字符数")
-    chunk_overlap = st.slider("Overlap", 0, 500, 200, 25,
-                              help="相邻文档块的重叠字符数")
 
     st.markdown("---")
 

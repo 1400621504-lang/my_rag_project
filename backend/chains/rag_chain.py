@@ -13,6 +13,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.documents import Document
 from typing import List, Dict, Any, Optional
 import yaml
 from pathlib import Path
@@ -147,11 +148,45 @@ class RAGChain:
         else:
             docs = self.retriever.invoke(question)
 
-        # 第二阶段：精排
+        # 第二阶段：精排（在子块上做，语义聚焦更准）
         if self.rerank_enabled and docs:
             docs = self.reranker.rerank(question, docs, top_n=final_k)
 
+        # 第三阶段：子块 → 父块展开（small-to-big）
+        docs = self._expand_to_parents(docs)
+
         return docs
+
+    def _expand_to_parents(self, docs: List) -> List:
+        """把命中的子块替换为其父块（父子检索的最后一步）
+
+        - 文档若不带 parent_content（recursive 切分），原样返回。
+        - 多个子块命中同一父块时按 parent_doc_id 去重，
+          保留首次出现的那条（= 精排分最高），避免父块重复占满上下文。
+        - 展开后的父块继承子块已有的 rerank_score / rrf_score 等元数据。
+        """
+        if not docs:
+            return docs
+
+        seen_parents = set()
+        expanded = []
+        for doc in docs:
+            parent_content = doc.metadata.get('parent_content')
+            if not parent_content:
+                expanded.append(doc)  # 非父子模式
+                continue
+
+            pid = doc.metadata.get('parent_doc_id') or doc.metadata.get('parent_id')
+            if pid in seen_parents:
+                continue
+            seen_parents.add(pid)
+
+            meta = {k: v for k, v in doc.metadata.items() if k != 'parent_content'}
+            meta['chunk_type'] = 'parent'
+            meta['matched_child'] = doc.page_content[:60]  # 调试：记录命中的子块
+            expanded.append(Document(page_content=parent_content, metadata=meta))
+
+        return expanded
 
     def _create_chain(self):
         """创建 RAG 链
