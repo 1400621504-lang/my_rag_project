@@ -596,6 +596,15 @@ with chat_container:
                     unsafe_allow_html=True
                 )
 
+            meta = msg.get("meta") or {}
+            if meta:
+                grounded = not str(meta.get("answer_source", "")).startswith("fallback")
+                st.caption(
+                    f"检索 {meta.get('search_calls', 0)} 次 · "
+                    f"{meta.get('latency_ms', 0) / 1000:.1f}s · "
+                    + ("Agent 依据检索作答" if grounded else "模型未检索，已回退固定管线")
+                )
+
 # ==================== 输入区域 ====================
 
 question = st.chat_input("输入问题...")
@@ -627,6 +636,7 @@ if question:
         rag_chain.retriever = rag_chain._init_retriever()
 
         # 生成回答
+        meta = {}
         try:
             if engine_mode == "Agent 多跳":
                 with st.chat_message("assistant"):
@@ -656,6 +666,12 @@ if question:
                         response_placeholder.markdown(full_answer)
                     answer = full_answer
 
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": answer,
+                "sources": sources,
+                "meta": meta,
+            })
         except Exception as e:
             st.error(f"错误：{str(e)}")
 

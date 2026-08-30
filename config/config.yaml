@@ -39,6 +39,9 @@ llm:
     base_url: "http://localhost:11434"
     max_tokens: 2048
     temperature: 0.7
+    # 模型上下文窗口。不设的话 Ollama 按自己的默认值裁提示词，
+    # 检索资料一多就出现"命中了但模型说不知道"（实测见 backend/eval/RESULTS.md F13）
+    num_ctx: 8192
   api:
     provider: "deepseek"
     model_name: "deepseek-chat"
@@ -84,6 +87,9 @@ retrieval:
   multi_query:
     enabled: false  # 暂不启用，后续实现
     num_queries: 3
+  # 最终进入提示词的资料字符预算（14 块全召回约 9000 字，会把 8192 的窗口撑爆）
+  # 按名次从后往前丢，至少保留 1 条；设 0 表示不裁剪
+  max_context_chars: 6000
 
 # Agent 配置（Agentic RAG：由 LLM 自主决定检索策略）
 agent:

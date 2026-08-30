@@ -131,9 +131,10 @@ uvicorn backend.api.rag_api:app --reload --port 8000 # 或走 API
 |---|---|---|
 | `embedding` | `type`（ollama / local_hf / api）、模型名 | ollama + bge-m3 |
 | `rerank` | `enabled`、`candidate_k`（精排前召回数） | true / 20 |
-| `llm` | `type`（local / api）、模型、温度 | local + qwen2.5:7b |
+| `llm` | `type`（local / api）、模型、温度、`num_ctx`（上下文窗口） | local + qwen2.5:7b / 8192 |
 | `chunking` | `strategy`（recursive / parent_child）、父子块大小与重叠 | recursive，800/200，子块 200/50 |
 | `retrieval` | `search_type`（mmr / similarity）、`k`、`fetch_k`、`lambda_mult` | mmr / 5 / 20 / 0.7 |
+| `retrieval.max_context_chars` | 进入提示词的资料字符预算，按名次从后往前丢 | 6000（0=不裁剪） |
 | `retrieval.hybrid` | `enabled`、`bm25_top_k`、`rrf_k` | **true** / 20 / 60（改为默认开，依据见消融表） |
 | `agent` | `max_iterations`（LangGraph 步数上限）、`max_search_calls`、`temperature` | 8 / 4 / 0.1 |
 | `cache` | 检索结果缓存 `enabled`、`ttl`（秒）、`max_size` | true / 60 / 200 |
@@ -159,6 +160,10 @@ uvicorn backend.api.rag_api:app --reload --port 8000 # 或走 API
   所以 `agent.temperature` 单独设 0.1，而不是全局调低牺牲生成质量。
 - **MCP 层只做协议适配，不重写检索**：`mcp_server.py` 里每个工具都是转发到 `RAGChain.retrieve` / `AgentRAGChain.ask`，
   避免出现第二套检索实现和主链路漂移。模型实例也做成懒加载，否则客户端握手会等精排模型载完而超时。
+- **上下文自己按预算裁剪，不让推理引擎静默截断**：不显式设 `num_ctx` 时 Ollama 用自己的默认窗口，
+  提示词超出后从头部丢弃，而资料就拼在头部 —— 实测 Top K 从 5 调到 18，命中率更高、回答却三条全丢，
+  还编出了语料里不存在的部署地址。现在窗口写死 8192，另加 6000 字预算按精排名次从后往前丢，
+  并且链路和前端来源共用同一个裁剪入口，不会出现"给用户看了 14 条、模型只看到 9 条"。
 - **检索缓存的键必须带配置签名**：`/chat` 会先取来源再走生成，同一问题实际检索两遍，CPU 精排下这份重复很贵。
   但前端能实时改 `k` / 双路 / 精排开关，只按问题文本缓存会让"改了参数没生效"，
   所以键里编进 `k`、`search_type`、`hybrid`、`rerank`，文档增删时再主动清一次。

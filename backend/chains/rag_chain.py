@@ -21,6 +21,28 @@ import yaml
 from pathlib import Path
 
 
+def fit_context_budget(docs: List, max_chars: Optional[int]) -> List:
+    """按字符预算裁剪最终喂给模型的资料
+
+    存在的理由：Ollama 的上下文窗口是有限的，超出的部分会被从头部静默丢弃，
+    结果是"检索明明命中了，模型却说不知道"。与其让它截断，不如我们自己
+    按名次从后往前丢，保证留下的永远是精排分最高的那几条。
+    至少保留一条，哪怕它自己就超预算（截断单条比丢掉整条信息损失小）。
+    """
+    if not max_chars or max_chars <= 0 or not docs:
+        return docs
+    kept: List = []
+    used = 0
+    for doc in docs:
+        # 40 是序号与来源标签的额外开销
+        cost = len(doc.page_content) + 40
+        if kept and used + cost > max_chars:
+            break
+        kept.append(doc)
+        used += cost
+    return kept
+
+
 def format_docs(docs: List) -> str:
     """把检索到的文档拼成给 LLM 看的上下文文本
 
@@ -73,6 +95,11 @@ class RAGChain:
         self.cache_enabled = cache_config.get('enabled', True)
         self.cache_ttl = float(cache_config.get('ttl', 60))
         self.cache_max_size = int(cache_config.get('max_size', 200))
+        # 上下文字符预算：从 retrieval 段读，不跟着前端重建的 retrieval_config 走，
+        # 否则前端每次改参数都会把这个值丢掉
+        self.max_context_chars = int(
+            self.config.get('retrieval', {}).get('max_context_chars', 6000)
+        )
         self._retrieval_cache: "OrderedDict[str, Tuple[float, List]]" = OrderedDict()
 
         # 对话历史（自己管理，不依赖 langchain.memory）
@@ -109,6 +136,9 @@ class RAGChain:
                 model=local_config['model_name'],
                 base_url=local_config['base_url'],
                 temperature=local_config.get('temperature', 0.7),
+                # 不显式给 num_ctx 的话，Ollama 会用它自己的默认窗口，
+                # 检索资料一多就会被静默截断（实测见 RESULTS.md 的 F13）
+                num_ctx=int(local_config.get('num_ctx', 8192)),
             )
 
     def _init_retriever(self):
@@ -227,6 +257,15 @@ class RAGChain:
         """文档增删后手动清一下，避免 TTL 窗口内拿到旧结果"""
         self._retrieval_cache.clear()
 
+    def _context_docs(self, question: str) -> List:
+        """最终进入提示词的那批资料：检索结果再按字符预算裁剪
+
+        链路的 {context} 和前端的来源列表都走这里，
+        保证"列给用户看的"和"模型实际看到的"是同一批。
+        公开的 retrieve() 不裁剪，评测要量的是检索本身。
+        """
+        return fit_context_budget(self._retrieve_rerank(question), self.max_context_chars)
+
     def retrieve(self, question: str) -> List:
         """对外公开的检索入口（Agentic RAG 的工具、MCP server 都复用它）
 
@@ -288,7 +327,7 @@ class RAGChain:
 
         chain = (
             {
-                "context": RunnableLambda(self._retrieve_rerank) | format_docs,
+                "context": RunnableLambda(self._context_docs) | format_docs,
                 "question": RunnablePassthrough(),
                 "chat_history": lambda x: self.chat_messages[-self.max_history * 2:]
             }
@@ -328,7 +367,7 @@ class RAGChain:
 
     def get_sources(self, question: str) -> List[Dict[str, Any]]:
         """获取检索来源信息（不经过 LLM），与 LLM 看到的是同一批文档"""
-        docs = self._retrieve_rerank(question)
+        docs = self._context_docs(question)
         sources = []
         for doc in docs:
             src = {

@@ -124,6 +124,8 @@ class AgentRAGChain:
                 model=local["model_name"],
                 base_url=local.get("base_url", "http://localhost:11434"),
                 temperature=self.temperature,
+                # 与固定管线用同一个窗口设置，否则 Agent 检索到的资料会被静默截断
+                num_ctx=int(local.get("num_ctx", 8192)),
             )
         return self.rag.llm
 
