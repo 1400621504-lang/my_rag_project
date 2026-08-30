@@ -34,6 +34,20 @@ st.markdown("""
         background: #0d0d0d;
     }
 
+    /* stBottom（聊天输入区）自身是透明的，不补一层会露出浏览器浅色底 */
+    html, body {
+        background: #0d0d0d !important;
+    }
+    [data-testid="stBottom"],
+    [data-testid="stBottomBlockContainer"],
+    [data-testid="stBottom"] > div {
+        background: #0d0d0d !important;
+    }
+    /* 输入框外层容器留透明，只保留 textarea 自身的 #1e1e1e */
+    .stChatInput > div {
+        background: transparent !important;
+    }
+
     /* ===== 侧边栏 ===== */
     [data-testid="stSidebar"] {
         background: #161616;
@@ -244,6 +258,18 @@ st.markdown("""
     }
 
     /* ===== 选择框 ===== */
+    /* 下拉框（Streamlit 1.61 起为 react-aria ComboBox）本体默认白底，跟深色主题不搭 */
+    .react-aria-ComboBox > div {
+        background: #1e1e1e !important;
+        border: 1px solid #2a2a2a !important;
+    }
+    .react-aria-ComboBox input {
+        color: #e6e6e6 !important;
+    }
+    .react-aria-ComboBox svg {
+        stroke: #888 !important;
+    }
+
     .stSelectbox label {
         color: #888 !important;
         font-weight: 500 !important;
