@@ -1,0 +1,152 @@
+# 检索评测集（retrieval-only gold labels）
+#
+# 标注方式说明：
+#   不记录 chunk 序号或向量库 id（重建索引后会失效），而是记录 gold 块里
+#   必然出现的特征串。跑评测时按特征串在语料里反查，标注重建后依然成立。
+#
+# category 用于分类别统计，这比总分更有信息量：
+#   keyword        —— 查询词和文档字面高度重合，BM25 应占优
+#   semantic       —— 需要语义理解，向量应占优
+#   cross_lingual  —— 中英文混用，考察 embedding 的跨语种能力
+#   multi_topic    —— 一句话牵多个线索，考验融合与精排
+
+queries:
+  - id: q01
+    category: keyword
+    question: "学号 2350390033 是谁的"
+    gold_markers: ["2350390033"]
+
+  - id: q02
+    category: keyword
+    question: "实验室在哪个房间"
+    gold_markers: ["S4108"]
+
+  - id: q03
+    category: keyword
+    question: "指导教师是谁"
+    gold_markers: ["李剑"]
+
+  - id: q04
+    category: keyword
+    question: "Boss 战 BGM 音量常量叫什么，值是多少"
+    gold_markers: ["BOSS_BGM_VOLUME"]
+
+  - id: q05
+    category: keyword
+    question: "overscroll-behavior 这个属性是干什么用的"
+    gold_markers: ["overscroll-behavior"]
+
+  - id: q06
+    category: keyword
+    question: "游戏的线上域名是什么"
+    gold_markers: ["huaduo.store"]
+
+  - id: q07
+    category: keyword
+    question: "GTE-Qwen2-7B 用在哪一层"
+    gold_markers: ["GTE-Qwen2-7B"]
+
+  - id: q08
+    category: keyword
+    question: "Qwen3-Reranker-4B 是哪个量级的模型"
+    gold_markers: ["Qwen3-Reranker-4B"]
+
+  - id: q09
+    category: keyword
+    question: "LeetCode 刷题目标数量"
+    gold_markers: ["LeetCode 目标 50+"]
+
+  - id: q10
+    category: keyword
+    question: "简历文件放在哪个路径"
+    gold_markers: ["高俊杰个人简历.html"]
+
+  - id: q11
+    category: semantic
+    question: "我是哪个学院哪个班的学生"
+    gold_markers: ["计算机与人工智能学院"]
+
+  - id: q12
+    category: semantic
+    question: "改代码之前需要先跟用户核对需求吗，流程是什么"
+    gold_markers: ["复述确认协议"]
+
+  - id: q13
+    category: semantic
+    question: "知识库里的文档是怎么一步步变成可检索内容的"
+    gold_markers: ["阶段一：建知识库"]
+
+  - id: q14
+    category: semantic
+    question: "为什么检索时返回短片段、给模型看的却是长片段"
+    gold_markers: ["小子块检索，大父块返回"]
+
+  - id: q15
+    category: semantic
+    question: "手机在小米浏览器上边缘划不动，怎么解决的"
+    gold_markers: ["系统手势拦截"]
+
+  - id: q16
+    category: semantic
+    question: "游戏改了以后怎么发布到公网让别人访问"
+    gold_markers: ["GitHub Pages"]
+
+  - id: q17
+    category: semantic
+    question: "为什么静音开关有时候不生效"
+    gold_markers: ["_bossAudio.volume"]
+
+  - id: q18
+    category: semantic
+    question: "为什么不去投纯算法岗而选应用方向"
+    gold_markers: ["卡学历轻"]
+
+  - id: q19
+    category: semantic
+    question: "Top K 是不是越大越好，为什么"
+    gold_markers: ["Lost in the Middle"]
+
+  - id: q20
+    category: semantic
+    question: "第一个正式版本之后，宠物系统被换成了什么"
+    gold_markers: ["宠物→海克斯符文"]
+
+  - id: q21
+    category: semantic
+    question: "KnowFlow 那个基础版本的项目放在哪"
+    gold_markers: ["AI_Learning/rag_project"]
+
+  - id: q22
+    category: semantic
+    question: "我在开源项目上提的那个改动叫什么"
+    gold_markers: ["支持可配置的 Embedding 模型"]
+
+  - id: q23
+    category: cross_lingual
+    question: "which embedding models can run locally"
+    gold_markers: ["BGE-M3"]
+
+  - id: q24
+    category: cross_lingual
+    question: "how is the game implemented technically"
+    gold_markers: ["纯 JavaScript + Canvas 2D"]
+
+  - id: q25
+    category: cross_lingual
+    question: "the resume award part"
+    gold_markers: ["机器人创意大赛省级三等奖"]
+
+  - id: q26
+    category: multi_topic
+    question: "复述确认协议要求用什么开头复述，以及注释必须用哪种语言"
+    gold_markers: ["确认理解"]
+
+  - id: q27
+    category: multi_topic
+    question: "记忆汇总文件的整合日期和数据来源分别是什么"
+    gold_markers: ["整合日期：2026-08-29"]
+
+  - id: q28
+    category: multi_topic
+    question: "待办里 RAG 项目打算部署到什么地方"
+    gold_markers: ["RAG 项目部署上线"]
