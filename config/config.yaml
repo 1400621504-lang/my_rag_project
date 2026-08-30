@@ -19,13 +19,13 @@ embedding:
 
 # Rerank 模型配置
 rerank:
-  enabled: false  # 暂时没有本地 Rerank 模型，后续可加
+  enabled: true  # 已下载 bge-reranker-base 到本地
   type: "local"  # local | api
   local:
-    model_name: "bge-reranker-v2-m3"
-    model_path: "./models/rerank/bge-reranker-v2-m3"
+    model_name: "bge-reranker-base"
+    model_path: "./models/rerank/bge-reranker-base"
     max_length: 512
-    top_k: 5
+    candidate_k: 20  # 精排前召回的候选数量（越多越准，但越慢）
   api:
     provider: "cohere"
     model_name: "rerank-v3.5"
@@ -76,6 +76,11 @@ retrieval:
     k: 5  # 最终返回数量
     fetch_k: 20  # MMR 候选数量
     lambda_mult: 0.7  # MMR 多样性权重（0=多样性，1=相关性）
+  # 双路检索：向量召回 + BM25 关键词召回，RRF 融合后再精排
+  hybrid:
+    enabled: false  # 默认关，可在前端开关打开
+    bm25_top_k: 20  # BM25 单路召回数量
+    rrf_k: 60  # RRF 平滑常数（经验值 60）
   multi_query:
     enabled: false  # 暂不启用，后续实现
     num_queries: 3

@@ -297,6 +297,41 @@ class VectorstoreService:
             print(f"获取文档块失败：{e}")
             return []
 
+    def get_all_documents(self) -> List[Document]:
+        """获取向量库中所有文档块（LangChain Document 对象）
+
+        供 BM25 等需要全量语料的检索方式建索引使用。
+
+        Returns:
+            所有文档块组成的 Document 列表
+        """
+        try:
+            results = self._vectorstore.get(
+                include=['documents', 'metadatas']
+            )
+            if not results or not results['ids']:
+                return []
+
+            docs = []
+            for doc_id, content, metadata in zip(
+                results['ids'], results['documents'], results['metadatas']
+            ):
+                meta = dict(metadata or {})
+                meta['id'] = doc_id
+                docs.append(Document(page_content=content, metadata=meta))
+            return docs
+        except Exception as e:
+            print(f"获取全部文档失败：{e}")
+            return []
+
+    def count(self) -> int:
+        """返回向量库中的文档块总数（用于判断语料是否变化）"""
+        try:
+            results = self._vectorstore.get()
+            return len(results['ids']) if results and results['ids'] else 0
+        except Exception:
+            return 0
+
     def get_stats(self) -> dict:
         """获取向量库统计信息
 

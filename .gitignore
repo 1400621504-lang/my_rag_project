@@ -8,6 +8,7 @@ build/
 .eggs/
 *.whl
 data/
+models/
 .env
 .venv
 venv/

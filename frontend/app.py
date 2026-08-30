@@ -418,12 +418,32 @@ with st.sidebar:
     st.markdown("### 检索参数")
 
     top_k = st.slider("Top K", 1, 20, 5,
-                       help="检索返回的文档数量")
+                       help="最终交给大模型的文档数量")
     search_type = st.selectbox("检索策略", ["mmr", "similarity"])
     if search_type == "mmr":
         lambda_mult = st.slider("多样性 λ", 0.0, 1.0, 0.7, 0.05)
     else:
         lambda_mult = 0.7
+
+    # 双路检索（向量 + BM25 关键词）
+    hybrid_enabled = st.toggle("双路检索 (BM25)", value=rag_chain.hybrid_enabled,
+                               help="叠加关键词召回，擅长精确词/错误码，与向量结果 RRF 融合")
+    if hybrid_enabled:
+        bm25_top_k = st.slider("BM25 召回数", 5, 40,
+                               rag_chain.hybrid_config.get('bm25_top_k', 20),
+                               help="关键词检索单独召回的文档数")
+    else:
+        bm25_top_k = 20
+
+    # Rerank 精排
+    rerank_enabled = st.toggle("Rerank 精排", value=rag_chain.rerank_enabled,
+                               help="用交叉编码模型对候选重排序，更准但更慢")
+    if rerank_enabled:
+        candidate_k = st.slider("召回候选数", top_k, 40,
+                                max(rag_chain.reranker.candidate_k, top_k),
+                                help="精排前召回的候选数量，越大越准越慢")
+    else:
+        candidate_k = top_k
 
     st.markdown("---")
 
@@ -483,10 +503,12 @@ with chat_container:
 
             # 来源标签
             if sources:
-                source_html = " ".join([
-                    f'<span class="source-tag">{s.get("source", "未知")}</span>'
-                    for s in sources
-                ])
+                def _tag(s):
+                    label = s.get("source", "未知")
+                    if "rerank_score" in s:
+                        label += f' · {s["rerank_score"]}'
+                    return f'<span class="source-tag">{label}</span>'
+                source_html = " ".join([_tag(s) for s in sources])
                 st.markdown(
                     f'<div style="margin-bottom:16px;">{source_html}</div>',
                     unsafe_allow_html=True
@@ -507,14 +529,18 @@ if question:
         )
         st.session_state.messages.append({"role": "user", "content": question})
 
-        # 更新检索参数
+        # 更新检索参数（先设开关状态，因为重建检索器会读它们）
+        rag_chain.rerank_enabled = rerank_enabled
+        rag_chain.hybrid_enabled = hybrid_enabled
+        rag_chain.hybrid_config['bm25_top_k'] = bm25_top_k
         rag_chain.retrieval_config = {
             'search_type': search_type,
             'search_kwargs': {
                 'k': top_k,
-                'fetch_k': max(top_k * 4, 20),
+                'fetch_k': max(candidate_k, bm25_top_k, top_k * 4, 20),
                 'lambda_mult': lambda_mult,
-            }
+            },
+            'hybrid': rag_chain.hybrid_config,
         }
         rag_chain.retriever = rag_chain._init_retriever()
 

@@ -11,7 +11,7 @@ from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.messages import HumanMessage, AIMessage
 from typing import List, Dict, Any, Optional
 import yaml
@@ -38,6 +38,17 @@ class RAGChain:
         conversation_config = self.config.get('conversation', {})
         self.max_history = conversation_config.get('max_history', 10)
 
+        # Rerank 服务（单例，懒加载模型）
+        from backend.services.rerank_service import RerankService
+        self.reranker = RerankService()
+        self.rerank_enabled = self.reranker.enabled
+
+        # 双路检索（向量 + BM25），融合配置
+        self.hybrid_config = self.retrieval_config.get('hybrid', {})
+        self.hybrid_enabled = self.hybrid_config.get('enabled', False)
+        from backend.services.bm25_service import BM25Service
+        self.bm25 = BM25Service()
+
         # 对话历史（自己管理，不依赖 langchain.memory）
         self.chat_messages: List = []  # 存储 HumanMessage 和 AIMessage
 
@@ -46,7 +57,7 @@ class RAGChain:
         self.llm = self._init_llm()
         self.retriever = self._init_retriever()
 
-        # 创建链
+        # 创建链（依赖 self.retriever / self.reranker，须在其后）
         self.chain = self._create_chain()
 
     def _init_embeddings(self):
@@ -75,7 +86,11 @@ class RAGChain:
             )
 
     def _init_retriever(self):
-        """初始化检索器 - 使用真实向量库"""
+        """初始化检索器 - 使用真实向量库
+
+        若开启 Rerank，检索器负责"召回"更多候选（recall_k），
+        真正的"最终数量"由后续 rerank 精排决定；否则直接召回最终数量。
+        """
         from backend.services.vectorstore_service import VectorstoreService
 
         vs_service = VectorstoreService()
@@ -83,16 +98,60 @@ class RAGChain:
         search_type = self.retrieval_config.get('search_type', 'mmr')
         search_kwargs = self.retrieval_config.get('search_kwargs', {})
 
-        k = search_kwargs.get('k', 5)
-        fetch_k = search_kwargs.get('fetch_k', 20)
+        final_k = search_kwargs.get('k', 5)
         lambda_mult = search_kwargs.get('lambda_mult', 0.7)
+
+        if self.rerank_enabled:
+            # 召回阶段放大：取候选数与最终数的较大者，保证精排有足够料
+            recall_k = max(self.reranker.candidate_k, final_k)
+        else:
+            recall_k = final_k
+
+        fetch_k = search_kwargs.get('fetch_k', 20)
+        # MMR 的 fetch_k 必须 >= 召回数
+        fetch_k = max(fetch_k, recall_k)
 
         return vs_service.get_retriever(
             search_type=search_type,
-            k=k,
+            k=recall_k,
             fetch_k=fetch_k,
             lambda_mult=lambda_mult
         )
+
+    def _retrieve_rerank(self, question: str) -> List:
+        """统一的检索入口：召回 →（可选）融合 →（可选）精排 → 最终文档
+
+        完整 RAG 检索管线（对标 QAnything）：
+          双路检索开启时：向量召回 + BM25 召回 → RRF 融合
+          否则：仅向量召回
+          精排开启时：对候选集做 cross-encoder rerank 取 top_k
+        链里的 context 组装和前端展示来源都走这个方法，
+        保证 LLM 看到的和前端列出的来源是同一批。
+        """
+        final_k = self.retrieval_config.get('search_kwargs', {}).get('k', 5)
+
+        # 第一阶段：召回
+        if self.hybrid_enabled:
+            from backend.retriever.fusion import reciprocal_rank_fusion
+            vector_docs = self.retriever.invoke(question)
+            bm25_docs = self.bm25.search(
+                question, k=self.hybrid_config.get('bm25_top_k', 20)
+            )
+            # 融合后的候选数：精排开则多留点给 rerank 挑，否则直接到最终数
+            fused_n = max(self.reranker.candidate_k, final_k) if self.rerank_enabled else final_k
+            docs = reciprocal_rank_fusion(
+                [vector_docs, bm25_docs],
+                k=self.hybrid_config.get('rrf_k', 60),
+                top_n=fused_n,
+            )
+        else:
+            docs = self.retriever.invoke(question)
+
+        # 第二阶段：精排
+        if self.rerank_enabled and docs:
+            docs = self.reranker.rerank(question, docs, top_n=final_k)
+
+        return docs
 
     def _create_chain(self):
         """创建 RAG 链
@@ -126,7 +185,7 @@ class RAGChain:
 
         chain = (
             {
-                "context": self.retriever | format_docs,
+                "context": RunnableLambda(self._retrieve_rerank) | format_docs,
                 "question": RunnablePassthrough(),
                 "chat_history": lambda x: self.chat_messages[-self.max_history * 2:]
             }
@@ -165,15 +224,18 @@ class RAGChain:
         self._save_to_memory(question, "".join(full_answer))
 
     def get_sources(self, question: str) -> List[Dict[str, Any]]:
-        """获取检索来源信息（不经过 LLM）"""
-        docs = self.retriever.invoke(question)
+        """获取检索来源信息（不经过 LLM），与 LLM 看到的是同一批文档"""
+        docs = self._retrieve_rerank(question)
         sources = []
         for doc in docs:
-            sources.append({
+            src = {
                 "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
                 "source": doc.metadata.get('source', '未知'),
                 "chunk_type": doc.metadata.get('chunk_type', 'unknown'),
-            })
+            }
+            if 'rerank_score' in doc.metadata:
+                src['rerank_score'] = round(doc.metadata['rerank_score'], 3)
+            sources.append(src)
         return sources
 
     def clear_memory(self):
