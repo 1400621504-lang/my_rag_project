@@ -364,7 +364,7 @@ with st.sidebar:
             accept_multiple_files=True,
             label_visibility="collapsed"
         )
-        if uploaded_files and st.button("处理入库", use_container_width=True):
+        if uploaded_files and st.button("处理入库", width="stretch"):
             total = 0
             progress = st.progress(0)
             for i, file in enumerate(uploaded_files):
@@ -391,7 +391,7 @@ with st.sidebar:
                         f'</div>',
                         unsafe_allow_html=True
                     )
-                if st.button("删除", key=f"del_{doc['source']}", use_container_width=True):
+                if st.button("删除", key=f"del_{doc['source']}", width="stretch"):
                     vs_service.delete_by_source(doc['source'])
                     st.rerun()
     else:
@@ -457,12 +457,12 @@ with st.sidebar:
     # ===== 操作 =====
     col3, col4 = st.columns(2)
     with col3:
-        if st.button("清空对话", use_container_width=True):
+        if st.button("清空对话", width="stretch"):
             rag_chain.clear_memory()
             st.session_state.messages = []
             st.rerun()
     with col4:
-        if st.button("清空知识库", use_container_width=True):
+        if st.button("清空知识库", width="stretch"):
             vs_service.clear_all()
             st.rerun()
 
